@@ -134,6 +134,17 @@ class ClaudeChatProvider {
 		suggestions?: any[];
 		toolUseId: string;
 	}> = new Map();
+	// Pending AskUserQuestion requests from stdio control_request messages
+	private _pendingQuestionRequests: Map<string, {
+		requestId: string;
+		questions: Array<{
+			question: string;
+			header: string;
+			multiSelect: boolean;
+			options: Array<{ label: string; description: string }>;
+		}>;
+		toolUseId: string;
+	}> = new Map();
 	private _currentConversation: Array<{ timestamp: string, messageType: string, data: any }> = [];
 	private _conversationStartTime: string | undefined;
 	private _conversationIndex: Array<{
@@ -153,6 +164,7 @@ class ClaudeChatProvider {
 	private _selectedModel: string = 'default'; // Default model
 	private _isProcessing: boolean | undefined;
 	private _draftMessage: string = '';
+	private _planModeEnabled: boolean = false; // Track plan mode state from webview
 
 	constructor(
 		private readonly _extensionUri: vscode.Uri,
@@ -385,6 +397,16 @@ class ClaudeChatProvider {
 				return;
 			case 'saveInputText':
 				this._saveInputText(message.text);
+				return;
+			case 'planModeChanged':
+				this._planModeEnabled = message.enabled;
+				return;
+			case 'questionResponse':
+				this._handleQuestionResponse(message.id, message.answers);
+				return;
+			case 'triggerTestQuestion':
+				// Debug: trigger test AskUserQuestion UI
+				this._postMessage({ type: 'testAskUserQuestion' });
 				return;
 		}
 	}
@@ -1501,6 +1523,26 @@ class ClaudeChatProvider {
 
 		console.log(`Permission request for tool: ${toolName}, requestId: ${requestId}`);
 
+		// Handle AskUserQuestion tool specially - show question UI instead of permission dialog
+		if (toolName === 'AskUserQuestion') {
+			this._handleAskUserQuestion(requestId, input.questions || [], toolUseId);
+			return;
+		}
+
+		// Auto-deny EnterPlanMode if Plan First toggle is OFF
+		// This prevents Claude from entering plan mode on its own when user hasn't enabled it
+		if (toolName === 'EnterPlanMode' && !this._planModeEnabled) {
+			console.log('Auto-denying EnterPlanMode because Plan First toggle is OFF');
+			this._sendPermissionResponse(requestId, false, {
+				requestId,
+				toolName,
+				input,
+				suggestions,
+				toolUseId
+			}, false);
+			return;
+		}
+
 		// Check if this tool is pre-approved
 		const isPreApproved = await this._isToolPreApproved(toolName, input);
 
@@ -1644,9 +1686,113 @@ class ClaudeChatProvider {
 	}
 
 	/**
-	 * Cancel all pending permission requests (called when process ends)
+	 * Handle AskUserQuestion tool requests from Claude CLI
+	 * Shows interactive question UI to user and sends response back
+	 */
+	private _handleAskUserQuestion(
+		requestId: string,
+		questions: Array<{
+			question: string;
+			header: string;
+			multiSelect: boolean;
+			options: Array<{ label: string; description: string }>;
+		}>,
+		toolUseId: string
+	): void {
+		console.log(`AskUserQuestion request: ${requestId}, ${questions.length} questions`);
+
+		// Store the pending request
+		this._pendingQuestionRequests.set(requestId, {
+			requestId,
+			questions,
+			toolUseId
+		});
+
+		// Send to webview for display
+		this._sendAndSaveMessage({
+			type: 'askUserQuestion',
+			data: {
+				id: requestId,
+				questions: questions,
+				status: 'pending'
+			}
+		});
+	}
+
+	/**
+	 * Handle user's answer to AskUserQuestion from webview
+	 */
+	private _handleQuestionResponse(id: string, answers: Record<string, string | string[]>): void {
+		const pendingRequest = this._pendingQuestionRequests.get(id);
+		if (!pendingRequest) {
+			console.error('No pending question request found for id:', id);
+			return;
+		}
+
+		// Remove from pending
+		this._pendingQuestionRequests.delete(id);
+
+		// Send response to Claude CLI via stdin
+		this._sendQuestionResponse(id, answers, pendingRequest);
+
+		// Update UI to show answered state
+		this._postMessage({
+			type: 'updateQuestionStatus',
+			data: {
+				id: id,
+				status: 'answered',
+				answers: answers
+			}
+		});
+	}
+
+	/**
+	 * Send AskUserQuestion response back to Claude CLI via stdin
+	 */
+	private _sendQuestionResponse(
+		requestId: string,
+		answers: Record<string, string | string[]>,
+		pendingRequest: {
+			requestId: string;
+			questions: Array<{
+				question: string;
+				header: string;
+				multiSelect: boolean;
+				options: Array<{ label: string; description: string }>;
+			}>;
+			toolUseId: string;
+		}
+	): void {
+		if (!this._currentClaudeProcess?.stdin || this._currentClaudeProcess.stdin.destroyed) {
+			console.error('Cannot send question response: stdin not available');
+			return;
+		}
+
+		const response = {
+			type: 'control_response',
+			response: {
+				subtype: 'success',
+				request_id: requestId,
+				response: {
+					behavior: 'allow',
+					updatedInput: {
+						answers: answers
+					},
+					toolUseID: pendingRequest.toolUseId
+				}
+			}
+		};
+
+		const responseJson = JSON.stringify(response) + '\n';
+		console.log('Sending question response:', responseJson);
+		this._currentClaudeProcess.stdin.write(responseJson);
+	}
+
+	/**
+	 * Cancel all pending permission and question requests (called when process ends)
 	 */
 	private _cancelPendingPermissionRequests(): void {
+		// Cancel permission requests
 		for (const [id, _request] of this._pendingPermissionRequests) {
 			this._postMessage({
 				type: 'updatePermissionStatus',
@@ -1657,6 +1803,18 @@ class ClaudeChatProvider {
 			});
 		}
 		this._pendingPermissionRequests.clear();
+
+		// Cancel question requests
+		for (const [id, _request] of this._pendingQuestionRequests) {
+			this._postMessage({
+				type: 'updateQuestionStatus',
+				data: {
+					id: id,
+					status: 'cancelled'
+				}
+			});
+		}
+		this._pendingQuestionRequests.clear();
 	}
 
 	/**

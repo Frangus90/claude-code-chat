@@ -858,6 +858,11 @@ const getScript = (isTelemetryEnabled: boolean) => `<script>
 			} else {
 				switchElement.classList.remove('active');
 			}
+			// Notify extension of plan mode state change
+			vscode.postMessage({
+				type: 'planModeChanged',
+				enabled: planModeEnabled
+			});
 		}
 
 		function toggleThinkingMode() {
@@ -2369,6 +2374,15 @@ const getScript = (isTelemetryEnabled: boolean) => `<script>
 				case 'updatePermissionStatus':
 					updatePermissionStatus(message.data.id, message.data.status);
 					break;
+				case 'askUserQuestion':
+					addAskUserQuestionMessage(message.data);
+					break;
+				case 'updateQuestionStatus':
+					updateQuestionStatus(message.data.id, message.data.status, message.data.answers);
+					break;
+				case 'testAskUserQuestion':
+					window.testAskUserQuestion();
+					break;
 				case 'expirePendingPermissions':
 					expireAllPendingPermissions();
 					break;
@@ -2520,6 +2534,264 @@ const getScript = (isTelemetryEnabled: boolean) => `<script>
 			}
 			permissionContent.appendChild(decisionDiv);
 		}
+
+		// AskUserQuestion functions
+		function addAskUserQuestionMessage(data) {
+			const messagesDiv = document.getElementById('messages');
+			const shouldScroll = shouldAutoScroll(messagesDiv);
+
+			const messageDiv = document.createElement('div');
+			messageDiv.className = 'message ask-user-question';
+			messageDiv.id = \`question-\${data.id}\`;
+			messageDiv.dataset.status = data.status || 'pending';
+
+			let contentHtml = '';
+			const status = data.status || 'pending';
+
+			if (status === 'pending') {
+				contentHtml = \`
+					<div class="question-header">
+						<span class="icon">❓</span>
+						<span>Claude needs your input</span>
+					</div>
+					<div class="question-content">
+						<form id="questionForm-\${data.id}" onsubmit="submitQuestionResponse('\${data.id}', event)">
+				\`;
+
+				// Render each question
+				data.questions.forEach((q, qIndex) => {
+					const inputType = q.multiSelect ? 'checkbox' : 'radio';
+					const inputName = \`question-\${data.id}-\${qIndex}\`;
+
+					contentHtml += \`
+						<div class="question-block" data-question-index="\${qIndex}">
+							<div class="question-label">\${escapeHtml(q.header)}</div>
+							<div class="question-text">\${escapeHtml(q.question)}</div>
+							<div class="question-options">
+					\`;
+
+					// Render options
+					q.options.forEach((opt, optIndex) => {
+						contentHtml += \`
+							<label class="question-option">
+								<input type="\${inputType}" name="\${inputName}" value="\${optIndex}" />
+								<div class="option-content">
+									<span class="option-label">\${escapeHtml(opt.label)}</span>
+									<span class="option-description">\${escapeHtml(opt.description)}</span>
+								</div>
+							</label>
+						\`;
+					});
+
+					// Add "Other" option
+					contentHtml += \`
+							<label class="question-option other-option">
+								<input type="\${inputType}" name="\${inputName}" value="other"
+									   onchange="toggleOtherInput('\${data.id}', \${qIndex}, this.checked || this.selected)" />
+								<div class="option-content">
+									<span class="option-label">Other</span>
+									<span class="option-description">Provide custom response</span>
+								</div>
+							</label>
+							<div class="other-input-wrapper" id="otherInput-\${data.id}-\${qIndex}" style="display: none;">
+								<input type="text" class="other-text-input" placeholder="Enter your response..."
+									   name="\${inputName}-other-text" />
+							</div>
+						</div>
+					</div>
+					\`;
+				});
+
+				contentHtml += \`
+						<div class="question-buttons">
+							<button type="submit" class="btn submit-question">Submit</button>
+						</div>
+					</form>
+				</div>
+				\`;
+			} else if (status === 'answered') {
+				contentHtml = buildAnsweredQuestionHtml(data);
+			} else if (status === 'cancelled' || status === 'expired') {
+				contentHtml = buildExpiredQuestionHtml();
+			}
+
+			messageDiv.innerHTML = contentHtml;
+			messagesDiv.appendChild(messageDiv);
+			scrollToBottomIfNeeded(messagesDiv, shouldScroll);
+		}
+
+		function toggleOtherInput(requestId, questionIndex, isChecked) {
+			const wrapper = document.getElementById(\`otherInput-\${requestId}-\${questionIndex}\`);
+			if (wrapper) {
+				wrapper.style.display = isChecked ? 'block' : 'none';
+				if (isChecked) {
+					const input = wrapper.querySelector('input');
+					if (input) input.focus();
+				}
+			}
+		}
+
+		function submitQuestionResponse(requestId, event) {
+			event.preventDefault();
+
+			const form = document.getElementById(\`questionForm-\${requestId}\`);
+			const messageDiv = document.getElementById(\`question-\${requestId}\`);
+			const questionBlocks = messageDiv.querySelectorAll('.question-block');
+
+			const answers = {};
+
+			questionBlocks.forEach((questionBlock) => {
+				const qIndex = questionBlock.dataset.questionIndex;
+				const inputName = \`question-\${requestId}-\${qIndex}\`;
+				const inputs = form.querySelectorAll(\`input[name="\${inputName}"]:checked\`);
+
+				const selectedValues = [];
+				inputs.forEach(input => {
+					if (input.value === 'other') {
+						const otherText = form.querySelector(\`input[name="\${inputName}-other-text"]\`);
+						selectedValues.push(otherText ? otherText.value || 'Other' : 'Other');
+					} else {
+						// Get the label text for the selected option
+						const optionLabel = input.closest('.question-option').querySelector('.option-label');
+						selectedValues.push(optionLabel ? optionLabel.textContent : input.value);
+					}
+				});
+
+				// For single-select, return string; for multi-select, return array
+				const isMultiSelect = inputs.length > 0 && inputs[0].type === 'checkbox';
+				answers[qIndex] = isMultiSelect ? selectedValues : (selectedValues[0] || '');
+			});
+
+			// Send to extension
+			vscode.postMessage({
+				type: 'questionResponse',
+				id: requestId,
+				answers: answers
+			});
+
+			// Update UI immediately to show answered state
+			updateQuestionStatusLocal(requestId, 'answered', answers);
+		}
+
+		function updateQuestionStatusLocal(id, status, answers) {
+			const questionMsg = document.getElementById(\`question-\${id}\`);
+			if (!questionMsg) return;
+
+			questionMsg.dataset.status = status;
+
+			if (status === 'answered') {
+				questionMsg.classList.add('question-answered');
+				// Rebuild content to show answers
+				const form = questionMsg.querySelector('form');
+				if (form) {
+					const buttons = form.querySelector('.question-buttons');
+					if (buttons) buttons.style.display = 'none';
+
+					// Disable all inputs
+					form.querySelectorAll('input').forEach(input => {
+						input.disabled = true;
+					});
+
+					// Add answered badge
+					const questionContent = questionMsg.querySelector('.question-content');
+					const decisionDiv = document.createElement('div');
+					decisionDiv.className = 'question-decision answered';
+					decisionDiv.innerHTML = '✅ Response submitted';
+					questionContent.appendChild(decisionDiv);
+				}
+			}
+		}
+
+		function updateQuestionStatus(id, status, answers) {
+			const questionMsg = document.getElementById(\`question-\${id}\`);
+			if (!questionMsg) return;
+
+			questionMsg.dataset.status = status;
+
+			if (status === 'answered') {
+				updateQuestionStatusLocal(id, status, answers);
+			} else if (status === 'cancelled' || status === 'expired') {
+				questionMsg.classList.add('question-expired');
+				const form = questionMsg.querySelector('form');
+				if (form) {
+					form.innerHTML = '<div class="question-decision expired">⏱️ This question expired</div>';
+				}
+			}
+		}
+
+		function buildAnsweredQuestionHtml(data) {
+			let html = \`
+				<div class="question-header">
+					<span class="icon">❓</span>
+					<span>Claude needs your input</span>
+				</div>
+				<div class="question-content answered">
+			\`;
+
+			if (data.questions) {
+				data.questions.forEach((q, qIndex) => {
+					const answer = data.answers ? data.answers[qIndex] : '';
+					const answerText = Array.isArray(answer) ? answer.join(', ') : answer;
+					html += \`
+						<div class="question-block answered">
+							<div class="question-label">\${escapeHtml(q.header)}</div>
+							<div class="question-text">\${escapeHtml(q.question)}</div>
+							<div class="question-answer">Your answer: <strong>\${escapeHtml(answerText)}</strong></div>
+						</div>
+					\`;
+				});
+			}
+
+			html += \`
+					<div class="question-decision answered">✅ Response submitted</div>
+				</div>
+			\`;
+			return html;
+		}
+
+		function buildExpiredQuestionHtml() {
+			return \`
+				<div class="question-header">
+					<span class="icon">❓</span>
+					<span>Claude needs your input</span>
+				</div>
+				<div class="question-content">
+					<div class="question-decision expired">⏱️ This question expired</div>
+				</div>
+			\`;
+		}
+
+		// Debug function to test AskUserQuestion UI (call from console: testAskUserQuestion())
+		window.testAskUserQuestion = function() {
+			const testData = {
+				id: 'test-' + Date.now(),
+				status: 'pending',
+				questions: [
+					{
+						header: 'Auth method',
+						question: 'Which authentication method should we use for this application?',
+						multiSelect: false,
+						options: [
+							{ label: 'OAuth 2.0', description: 'Industry standard, supports SSO and social login' },
+							{ label: 'JWT tokens', description: 'Stateless authentication, good for APIs' },
+							{ label: 'Session cookies', description: 'Traditional approach, simpler to implement' }
+						]
+					},
+					{
+						header: 'Features',
+						question: 'Which additional features do you want to enable?',
+						multiSelect: true,
+						options: [
+							{ label: 'Remember me', description: 'Keep users logged in across sessions' },
+							{ label: '2FA', description: 'Two-factor authentication for extra security' },
+							{ label: 'Password reset', description: 'Email-based password recovery' }
+						]
+					}
+				]
+			};
+			addAskUserQuestionMessage(testData);
+			console.log('Test AskUserQuestion added with id:', testData.id);
+		};
 
 		function expireAllPendingPermissions() {
 			document.querySelectorAll('.permission-request').forEach(permissionMsg => {
