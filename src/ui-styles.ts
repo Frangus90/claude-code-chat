@@ -2366,6 +2366,47 @@ const styles = `
         color: var(--vscode-foreground);
     }
 
+    /* Collapsible header for project commands */
+    .collapsible-header {
+        display: flex;
+        align-items: center;
+        cursor: pointer;
+        padding: 8px 20px;
+        margin: 8px 0;
+        border-radius: 4px;
+        transition: background-color 0.15s ease;
+    }
+
+    .collapsible-header:hover {
+        background-color: var(--vscode-list-hoverBackground);
+    }
+
+    .collapsible-header h3 {
+        margin: 0;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .collapse-arrow {
+        font-size: 10px;
+        color: var(--vscode-descriptionForeground);
+        margin-right: 8px;
+        transition: transform 0.15s ease;
+        user-select: none;
+    }
+
+    .command-count {
+        font-size: 12px;
+        font-weight: 400;
+        color: var(--vscode-descriptionForeground);
+        opacity: 0.8;
+    }
+
+    .collapsible-content {
+        overflow: hidden;
+    }
+
     .slash-commands-info {
         padding: 12px 20px;
         background-color: rgba(255, 149, 0, 0.1);

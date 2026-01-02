@@ -493,7 +493,23 @@ const getHtml = (isTelemetryEnabled: boolean) => `<!DOCTYPE html>
 					<input type="text" id="slashCommandsSearch" placeholder="Search commands and snippets..." oninput="filterSlashCommands()">
 				</div>
 			</div>
-			
+
+			<!-- Project Commands Section (from .claude/commands/) -->
+			<div class="slash-commands-section" id="projectCommandsSection" style="display: none;">
+				<div class="collapsible-header" onclick="toggleProjectCommandsCollapse()">
+					<span class="collapse-arrow" id="projectCommandsArrow">▼</span>
+					<h3>Project Commands <span class="command-count" id="projectCommandsCount"></span></h3>
+				</div>
+				<div class="collapsible-content" id="projectCommandsContent">
+					<div class="slash-commands-info">
+						<p>Commands discovered from .claude/commands/ folder</p>
+					</div>
+					<div class="slash-commands-list" id="projectCommandsList">
+						<!-- Discovered commands will be loaded here -->
+					</div>
+				</div>
+			</div>
+
 			<!-- Custom Commands Section -->
 			<div class="slash-commands-section">
 				<h3>Custom Commands</h3>

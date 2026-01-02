@@ -7,7 +7,10 @@
       "Bash(rg:*)",
       "Bash(npx tsc:*)",
       "Bash(npx typescript:*)",
-      "Bash(npm install:*)"
+      "Bash(npm install:*)",
+      "Bash(cat:*)",
+      "Bash(ls -la \"c:\\\\Users\\\\aleks\\\\Desktop\\\\Project\\\\CCC\\\\claude-code-chat\\\\.claude\"\" 2>/dev/null || echo \"Directory doesn 't exist yet \")",
+      "Bash(npx vsce:*)"
     ],
     "deny": []
   },

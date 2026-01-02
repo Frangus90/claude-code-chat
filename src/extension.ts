@@ -386,6 +386,9 @@ class ClaudeChatProvider {
 			case 'getCustomSnippets':
 				this._sendCustomSnippets();
 				return;
+			case 'getProjectCommands':
+				this._discoverProjectCommands();
+				return;
 			case 'saveCustomSnippet':
 				this._saveCustomSnippet(message.snippet);
 				return;
@@ -2240,6 +2243,83 @@ class ClaudeChatProvider {
 				data: {}
 			});
 		}
+	}
+
+	/**
+	 * Discover project commands from .claude/commands/ folder
+	 * Parses markdown files with YAML frontmatter for descriptions
+	 */
+	private async _discoverProjectCommands(): Promise<void> {
+		try {
+			const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+			if (!workspaceFolder) {
+				this._postMessage({ type: 'projectCommandsData', data: [] });
+				return;
+			}
+
+			const commandsUri = vscode.Uri.joinPath(workspaceFolder.uri, '.claude', 'commands');
+
+			let files: [string, vscode.FileType][];
+			try {
+				files = await vscode.workspace.fs.readDirectory(commandsUri);
+			} catch {
+				// Directory doesn't exist - no commands to discover
+				this._postMessage({ type: 'projectCommandsData', data: [] });
+				return;
+			}
+
+			const commands: Array<{ name: string; description: string; filePath: string }> = [];
+
+			for (const [fileName, fileType] of files) {
+				if (fileType !== vscode.FileType.File || !fileName.endsWith('.md')) {
+					continue;
+				}
+
+				const fileUri = vscode.Uri.joinPath(commandsUri, fileName);
+				try {
+					const contentBytes = await vscode.workspace.fs.readFile(fileUri);
+					const content = Buffer.from(contentBytes).toString('utf8');
+
+					// Parse YAML frontmatter
+					const frontmatter = this._parseCommandFrontmatter(content);
+					const name = fileName.replace(/\.md$/, '');
+
+					commands.push({
+						name,
+						description: frontmatter?.description || `Run /${name} command`,
+						filePath: fileUri.fsPath
+					});
+				} catch (error) {
+					console.error(`Error reading command file ${fileName}:`, error);
+				}
+			}
+
+			// Sort alphabetically by name
+			commands.sort((a, b) => a.name.localeCompare(b.name));
+
+			console.log(`Discovered ${commands.length} project commands`);
+			this._postMessage({ type: 'projectCommandsData', data: commands });
+		} catch (error) {
+			console.error('Error discovering project commands:', error);
+			this._postMessage({ type: 'projectCommandsData', data: [] });
+		}
+	}
+
+	/**
+	 * Parse YAML frontmatter from markdown file content
+	 */
+	private _parseCommandFrontmatter(content: string): { description: string } | null {
+		const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+		if (!match) {
+			return null;
+		}
+
+		const frontmatter = match[1];
+		const descMatch = frontmatter.match(/description:\s*(.+)/);
+
+		return {
+			description: descMatch ? descMatch[1].trim() : ''
+		};
 	}
 
 	private async _saveCustomSnippet(snippet: any): Promise<void> {

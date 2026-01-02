@@ -1793,6 +1793,73 @@ const getScript = (isTelemetryEnabled: boolean) => `<script>
 		// Store custom snippets data globally
 		let customSnippetsData = {};
 
+		// Store discovered project commands
+		let projectCommandsData = [];
+		let projectCommandsCollapsed = false;
+
+		/**
+		 * Toggle collapse state of project commands section
+		 */
+		function toggleProjectCommandsCollapse() {
+			projectCommandsCollapsed = !projectCommandsCollapsed;
+			const content = document.getElementById('projectCommandsContent');
+			const arrow = document.getElementById('projectCommandsArrow');
+
+			if (content && arrow) {
+				content.style.display = projectCommandsCollapsed ? 'none' : 'block';
+				arrow.textContent = projectCommandsCollapsed ? '▶' : '▼';
+				arrow.style.transform = projectCommandsCollapsed ? 'rotate(0deg)' : 'rotate(0deg)';
+			}
+		}
+
+		/**
+		 * Load and render discovered project commands from .claude/commands/
+		 */
+		function loadProjectCommands(commands) {
+			projectCommandsData = commands || [];
+			const list = document.getElementById('projectCommandsList');
+			const section = document.getElementById('projectCommandsSection');
+			const countEl = document.getElementById('projectCommandsCount');
+
+			if (!list || !section) return;
+
+			// Clear existing items
+			list.innerHTML = '';
+
+			// Show/hide section based on whether there are commands
+			section.style.display = commands.length > 0 ? 'block' : 'none';
+
+			// Update command count
+			if (countEl) {
+				countEl.textContent = '(' + commands.length + ')';
+			}
+
+			commands.forEach(cmd => {
+				const el = document.createElement('div');
+				el.className = 'slash-command-item prompt-snippet-item project-command-item';
+				el.onclick = () => executeProjectCommand(cmd.name);
+				el.innerHTML = \`
+					<div class="slash-command-icon">📂</div>
+					<div class="slash-command-content">
+						<div class="slash-command-title">/\${cmd.name}</div>
+						<div class="slash-command-description">\${cmd.description}</div>
+					</div>
+				\`;
+				list.appendChild(el);
+			});
+		}
+
+		/**
+		 * Execute a discovered project command by sending it to Claude
+		 */
+		function executeProjectCommand(name) {
+			hideSlashCommandsModal();
+
+			// Set the command in the input and send it
+			messageInput.value = '/' + name;
+			sendMessage();
+		}
+
 		function usePromptSnippet(snippetType) {
 			const builtInSnippets = {
 				'performance-analysis': 'Analyze this code for performance issues and suggest optimizations',
@@ -3529,6 +3596,11 @@ const getScript = (isTelemetryEnabled: boolean) => `<script>
 			type: 'getCustomSnippets'
 		});
 
+		// Request discovered project commands from .claude/commands/
+		vscode.postMessage({
+			type: 'getProjectCommands'
+		});
+
 		// Detect slash commands input
 		messageInput.addEventListener('input', (e) => {
 			const value = messageInput.value;
@@ -3548,6 +3620,9 @@ const getScript = (isTelemetryEnabled: boolean) => `<script>
 				customSnippetsData = message.data || {};
 				// Refresh the snippets display
 				loadCustomSnippets(customSnippetsData);
+			} else if (message.type === 'projectCommandsData') {
+				// Load discovered project commands from .claude/commands/
+				loadProjectCommands(message.data || []);
 			} else if (message.type === 'customSnippetSaved') {
 				// Refresh snippets after saving
 				vscode.postMessage({
