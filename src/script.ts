@@ -2129,7 +2129,14 @@ const getScript = (isTelemetryEnabled: boolean) => `<script>
 					addMessage(message.data, 'system');
 					updateStatusWithTotals();
 					break;
-					
+
+				case 'versionInfo':
+					const versionBadge = document.getElementById('versionBadge');
+					if (versionBadge && message.data.extensionVersion) {
+						versionBadge.textContent = 'v' + message.data.extensionVersion;
+					}
+					break;
+
 				case 'restoreInputText':
 					const inputField = document.getElementById('messageInput');
 					if (inputField && message.data) {
@@ -2440,6 +2447,15 @@ const getScript = (isTelemetryEnabled: boolean) => `<script>
 					break;
 				case 'updatePermissionStatus':
 					updatePermissionStatus(message.data.id, message.data.status);
+					break;
+				case 'planModeExited':
+					// Sync plan mode state when Claude exits plan mode
+					planModeEnabled = false;
+					const planSwitch = document.getElementById('planModeSwitch');
+					if (planSwitch) {
+						planSwitch.classList.remove('active');
+					}
+					console.log('Plan mode exited - toggle synced to OFF');
 					break;
 				case 'askUserQuestion':
 					addAskUserQuestionMessage(message.data);

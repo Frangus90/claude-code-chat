@@ -10,7 +10,8 @@
       "Bash(npm install:*)",
       "Bash(cat:*)",
       "Bash(ls -la \"c:\\\\Users\\\\aleks\\\\Desktop\\\\Project\\\\CCC\\\\claude-code-chat\\\\.claude\"\" 2>/dev/null || echo \"Directory doesn 't exist yet \")",
-      "Bash(npx vsce:*)"
+      "Bash(npx vsce:*)",
+      "Bash(del \"c:\\\\Users\\\\aleks\\\\Desktop\\\\Project\\\\CCC\\\\claude-code-chat\\\\build.sh\")"
     ],
     "deny": []
   },

@@ -2752,6 +2752,15 @@ const styles = `
         border-color: var(--vscode-terminal-ansiGreen);
     }
 
+    .version-badge {
+        font-size: 10px;
+        color: var(--vscode-descriptionForeground);
+        opacity: 0.7;
+        padding: 2px 6px;
+        border-radius: 3px;
+        background: var(--vscode-badge-background);
+    }
+
     /* Markdown content styles */
     .message h1, .message h2, .message h3, .message h4 {
         margin: 0.8em 0 0.4em 0;

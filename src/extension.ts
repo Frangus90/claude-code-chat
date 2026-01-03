@@ -266,6 +266,14 @@ class ClaudeChatProvider {
 			data: this._isProcessing ? 'Claude is working...' : 'Ready to chat with Claude Code! Type your message below.'
 		});
 
+		// Send extension version to webview
+		this._postMessage({
+			type: 'versionInfo',
+			data: {
+				extensionVersion: this._context.extension.packageJSON.version
+			}
+		});
+
 		// Send current model to webview
 		this._postMessage({
 			type: 'modelSelected',
@@ -1672,6 +1680,14 @@ class ClaudeChatProvider {
 
 		// Send the response to Claude via stdin
 		this._sendPermissionResponse(id, approved, pendingRequest, alwaysAllow);
+
+		// Sync plan mode state when ExitPlanMode is allowed
+		// This ensures the UI toggle turns OFF when Claude exits plan mode
+		if (pendingRequest.toolName === 'ExitPlanMode' && approved) {
+			console.log('ExitPlanMode allowed - syncing plan mode state to OFF');
+			this._planModeEnabled = false;
+			this._postMessage({ type: 'planModeExited' });
+		}
 
 		// Update the permission request status in UI
 		this._postMessage({
