@@ -2423,6 +2423,25 @@ const styles = `
         opacity: 0.9;
     }
 
+    .duplicate-commands-warning {
+        padding: 10px 16px;
+        background-color: rgba(255, 193, 7, 0.15);
+        border: 1px solid rgba(255, 193, 7, 0.4);
+        border-radius: 4px;
+        margin: 0 20px 12px 20px;
+        font-size: 11px;
+        color: var(--vscode-editorWarning-foreground, #cca700);
+    }
+
+    .duplicate-commands-warning strong {
+        color: var(--vscode-editorWarning-foreground, #cca700);
+    }
+
+    .duplicate-commands-warning .duplicate-note {
+        opacity: 0.7;
+        font-style: italic;
+    }
+
     .prompt-snippet-item {
         border-left: 2px solid var(--vscode-charts-blue);
         background-color: rgba(0, 122, 204, 0.03);
@@ -2759,6 +2778,36 @@ const styles = `
         padding: 2px 6px;
         border-radius: 3px;
         background: var(--vscode-badge-background);
+    }
+
+    .settings-description {
+        font-size: 12px;
+        color: var(--vscode-descriptionForeground);
+        margin: 4px 0 12px 0;
+    }
+
+    .sync-buttons {
+        display: flex;
+        gap: 8px;
+    }
+
+    .sync-status {
+        margin-top: 8px;
+        padding: 8px 12px;
+        border-radius: 4px;
+        font-size: 12px;
+    }
+
+    .sync-status.success {
+        background: rgba(0, 210, 106, 0.1);
+        color: var(--vscode-terminal-ansiGreen);
+        border: 1px solid var(--vscode-terminal-ansiGreen);
+    }
+
+    .sync-status.error {
+        background: rgba(255, 85, 85, 0.1);
+        color: var(--vscode-errorForeground);
+        border: 1px solid var(--vscode-errorForeground);
     }
 
     /* Markdown content styles */

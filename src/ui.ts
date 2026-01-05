@@ -348,7 +348,18 @@ const getHtml = (isTelemetryEnabled: boolean) => `<!DOCTYPE html>
 					</div>
 				</div>
 
-				
+				<!-- Sync Section -->
+				<div class="settings-section">
+					<h4>Sync .claude Folder</h4>
+					<p class="settings-description">Refresh user commands and skills from your .claude folder</p>
+					<div class="sync-buttons">
+						<button class="btn outlined" onclick="syncClaudeFolder()">
+							🔄 Sync Now
+						</button>
+					</div>
+					<div id="syncStatus" class="sync-status" style="display: none;"></div>
+				</div>
+
 			</div>
 		</div>
 	</div>
@@ -495,15 +506,18 @@ const getHtml = (isTelemetryEnabled: boolean) => `<!DOCTYPE html>
 				</div>
 			</div>
 
-			<!-- Project Commands Section (from .claude/commands/) -->
+			<!-- User Commands Section (from ~/.claude/commands/ and .claude/commands/) -->
 			<div class="slash-commands-section" id="projectCommandsSection" style="display: none;">
 				<div class="collapsible-header" onclick="toggleProjectCommandsCollapse()">
 					<span class="collapse-arrow" id="projectCommandsArrow">▼</span>
-					<h3>Project Commands <span class="command-count" id="projectCommandsCount"></span></h3>
+					<h3>User Commands <span class="command-count" id="projectCommandsCount"></span></h3>
 				</div>
 				<div class="collapsible-content" id="projectCommandsContent">
 					<div class="slash-commands-info">
-						<p>Commands discovered from .claude/commands/ folder</p>
+						<p>📂 Project • 👤 Global (~/.claude/commands/)</p>
+					</div>
+					<div class="duplicate-commands-warning" id="duplicateCommandsWarning" style="display: none;">
+						<!-- Duplicate warning will be shown here -->
 					</div>
 					<div class="slash-commands-list" id="projectCommandsList">
 						<!-- Discovered commands will be loaded here -->

@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import * as cp from 'child_process';
 import * as util from 'util';
 import * as path from 'path';
+import * as os from 'os';
 import getHtml from './ui';
 
 const exec = util.promisify(cp.exec);
@@ -396,6 +397,9 @@ class ClaudeChatProvider {
 				return;
 			case 'getProjectCommands':
 				this._discoverProjectCommands();
+				return;
+			case 'syncClaudeFolder':
+				this._syncClaudeFolder();
 				return;
 			case 'saveCustomSnippet':
 				this._saveCustomSnippet(message.snippet);
@@ -1633,7 +1637,7 @@ class ClaudeChatProvider {
 						updatedInput: pendingRequest.input,
 						// Pass back suggestions if user chose "always allow"
 						updatedPermissions: alwaysAllow ? pendingRequest.suggestions : undefined,
-						toolUseID: pendingRequest.toolUseId
+						tool_use_id: pendingRequest.toolUseId
 					}
 				}
 			};
@@ -1647,7 +1651,7 @@ class ClaudeChatProvider {
 						behavior: 'deny',
 						message: 'User denied permission',
 						interrupt: true,
-						toolUseID: pendingRequest.toolUseId
+						tool_use_id: pendingRequest.toolUseId
 					}
 				}
 			};
@@ -1797,7 +1801,7 @@ class ClaudeChatProvider {
 					updatedInput: {
 						answers: answers
 					},
-					toolUseID: pendingRequest.toolUseId
+					tool_use_id: pendingRequest.toolUseId
 				}
 			}
 		};
@@ -2264,61 +2268,100 @@ class ClaudeChatProvider {
 	/**
 	 * Discover project commands from .claude/commands/ folder
 	 * Parses markdown files with YAML frontmatter for descriptions
+	 * Project commands override global commands with the same name
 	 */
 	private async _discoverProjectCommands(): Promise<void> {
 		try {
+			// 1. Scan user home ~/.claude/commands/
+			const homeDir = os.homedir();
+			const userCommandsUri = vscode.Uri.file(path.join(homeDir, '.claude', 'commands'));
+			const userCommands = await this._scanCommandsFolder(userCommandsUri, 'user');
+
+			// 2. Scan workspace .claude/commands/
 			const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-			if (!workspaceFolder) {
-				this._postMessage({ type: 'projectCommandsData', data: [] });
-				return;
+			let projectCommands: Array<{ name: string; description: string; filePath: string; source: string }> = [];
+			if (workspaceFolder) {
+				const projectCommandsUri = vscode.Uri.joinPath(workspaceFolder.uri, '.claude', 'commands');
+				projectCommands = await this._scanCommandsFolder(projectCommandsUri, 'project');
 			}
 
-			const commandsUri = vscode.Uri.joinPath(workspaceFolder.uri, '.claude', 'commands');
+			// 3. Detect duplicates (project commands override user commands with same name)
+			const userCommandNames = new Set(userCommands.map(cmd => cmd.name));
+			const projectCommandNames = new Set(projectCommands.map(cmd => cmd.name));
+			const duplicates = [...userCommandNames].filter(name => projectCommandNames.has(name));
 
-			let files: [string, vscode.FileType][];
-			try {
-				files = await vscode.workspace.fs.readDirectory(commandsUri);
-			} catch {
-				// Directory doesn't exist - no commands to discover
-				this._postMessage({ type: 'projectCommandsData', data: [] });
-				return;
+			// 4. Build final command list (project overrides user)
+			const commandMap = new Map<string, { name: string; description: string; filePath: string; source: string }>();
+			for (const cmd of userCommands) {
+				commandMap.set(cmd.name, cmd);
+			}
+			for (const cmd of projectCommands) {
+				commandMap.set(cmd.name, cmd); // Project overrides user
 			}
 
-			const commands: Array<{ name: string; description: string; filePath: string }> = [];
-
-			for (const [fileName, fileType] of files) {
-				if (fileType !== vscode.FileType.File || !fileName.endsWith('.md')) {
-					continue;
-				}
-
-				const fileUri = vscode.Uri.joinPath(commandsUri, fileName);
-				try {
-					const contentBytes = await vscode.workspace.fs.readFile(fileUri);
-					const content = Buffer.from(contentBytes).toString('utf8');
-
-					// Parse YAML frontmatter
-					const frontmatter = this._parseCommandFrontmatter(content);
-					const name = fileName.replace(/\.md$/, '');
-
-					commands.push({
-						name,
-						description: frontmatter?.description || `Run /${name} command`,
-						filePath: fileUri.fsPath
-					});
-				} catch (error) {
-					console.error(`Error reading command file ${fileName}:`, error);
-				}
-			}
-
-			// Sort alphabetically by name
+			const commands = Array.from(commandMap.values());
 			commands.sort((a, b) => a.name.localeCompare(b.name));
 
-			console.log(`Discovered ${commands.length} project commands`);
-			this._postMessage({ type: 'projectCommandsData', data: commands });
+			// Log duplicates if any
+			if (duplicates.length > 0) {
+				console.log(`Found ${duplicates.length} duplicate command(s): ${duplicates.join(', ')} (project version used)`);
+			}
+
+			console.log(`Discovered ${commands.length} user commands (${userCommands.length} global, ${projectCommands.length} project, ${duplicates.length} duplicates)`);
+			this._postMessage({
+				type: 'projectCommandsData',
+				data: commands,
+				duplicates: duplicates
+			});
 		} catch (error) {
 			console.error('Error discovering project commands:', error);
-			this._postMessage({ type: 'projectCommandsData', data: [] });
+			this._postMessage({ type: 'projectCommandsData', data: [], duplicates: [] });
 		}
+	}
+
+	/**
+	 * Scan a commands folder and return array of command objects
+	 */
+	private async _scanCommandsFolder(
+		commandsUri: vscode.Uri,
+		source: 'project' | 'user'
+	): Promise<Array<{ name: string; description: string; filePath: string; source: string }>> {
+		const commands: Array<{ name: string; description: string; filePath: string; source: string }> = [];
+
+		let files: [string, vscode.FileType][];
+		try {
+			files = await vscode.workspace.fs.readDirectory(commandsUri);
+		} catch {
+			// Directory doesn't exist - no commands to discover
+			return commands;
+		}
+
+		for (const [fileName, fileType] of files) {
+			if (fileType !== vscode.FileType.File || !fileName.endsWith('.md')) {
+				continue;
+			}
+
+			const fileUri = vscode.Uri.joinPath(commandsUri, fileName);
+			try {
+				const contentBytes = await vscode.workspace.fs.readFile(fileUri);
+				const content = Buffer.from(contentBytes).toString('utf8');
+
+				// Parse YAML frontmatter
+				const frontmatter = this._parseCommandFrontmatter(content);
+				const name = fileName.replace(/\.md$/, '');
+
+				commands.push({
+					name,
+					description: frontmatter?.description || `Run /${name} command`,
+					filePath: fileUri.fsPath,
+					source
+				});
+			} catch (error) {
+				console.error(`Error reading command file ${fileName}:`, error);
+			}
+		}
+
+		return commands;
 	}
 
 	/**
@@ -2336,6 +2379,32 @@ class ClaudeChatProvider {
 		return {
 			description: descMatch ? descMatch[1].trim() : ''
 		};
+	}
+
+	/**
+	 * Sync .claude folder - refresh user commands and other discoverable content
+	 */
+	private async _syncClaudeFolder(): Promise<void> {
+		try {
+			console.log('Syncing .claude folder...');
+
+			// Re-discover project commands from both user home and workspace
+			await this._discoverProjectCommands();
+
+			// Send success response
+			this._postMessage({
+				type: 'syncComplete',
+				data: { message: 'Successfully synced .claude folder' }
+			});
+
+			console.log('.claude folder sync complete');
+		} catch (error) {
+			console.error('Error syncing .claude folder:', error);
+			this._postMessage({
+				type: 'syncError',
+				data: { message: error instanceof Error ? error.message : 'Unknown error' }
+			});
+		}
 	}
 
 	private async _saveCustomSnippet(snippet: any): Promise<void> {

@@ -1814,12 +1814,15 @@ const getScript = (isTelemetryEnabled: boolean) => `<script>
 
 		/**
 		 * Load and render discovered project commands from .claude/commands/
+		 * @param commands - Array of command objects
+		 * @param duplicates - Array of command names that exist in both project and global
 		 */
-		function loadProjectCommands(commands) {
+		function loadProjectCommands(commands, duplicates = []) {
 			projectCommandsData = commands || [];
 			const list = document.getElementById('projectCommandsList');
 			const section = document.getElementById('projectCommandsSection');
 			const countEl = document.getElementById('projectCommandsCount');
+			const duplicateWarning = document.getElementById('duplicateCommandsWarning');
 
 			if (!list || !section) return;
 
@@ -1834,12 +1837,24 @@ const getScript = (isTelemetryEnabled: boolean) => `<script>
 				countEl.textContent = '(' + commands.length + ')';
 			}
 
+			// Show/hide duplicate warning
+			if (duplicateWarning) {
+				if (duplicates.length > 0) {
+					duplicateWarning.style.display = 'block';
+					duplicateWarning.innerHTML = \`⚠️ <strong>\${duplicates.length} duplicate(s)</strong> found: \${duplicates.map(d => '/' + d).join(', ')} <span class="duplicate-note">(project version used)</span>\`;
+				} else {
+					duplicateWarning.style.display = 'none';
+				}
+			}
+
 			commands.forEach(cmd => {
 				const el = document.createElement('div');
 				el.className = 'slash-command-item prompt-snippet-item project-command-item';
 				el.onclick = () => executeProjectCommand(cmd.name);
+				// Show different icon based on source: 📂 for project, 👤 for user
+				const icon = cmd.source === 'user' ? '👤' : '📂';
 				el.innerHTML = \`
-					<div class="slash-command-icon">📂</div>
+					<div class="slash-command-icon">\${icon}</div>
 					<div class="slash-command-content">
 						<div class="slash-command-title">/\${cmd.name}</div>
 						<div class="slash-command-description">\${cmd.description}</div>
@@ -3433,6 +3448,17 @@ const getScript = (isTelemetryEnabled: boolean) => `<script>
 			document.getElementById('settingsModal').style.display = 'none';
 		}
 
+		function syncClaudeFolder() {
+			const statusEl = document.getElementById('syncStatus');
+			if (statusEl) {
+				statusEl.style.display = 'block';
+				statusEl.className = 'sync-status';
+				statusEl.textContent = '🔄 Syncing...';
+			}
+
+			vscode.postMessage({ type: 'syncClaudeFolder' });
+		}
+
 		function updateSettings() {
 			// Note: thinking intensity is now handled separately in the thinking intensity modal
 			
@@ -3638,7 +3664,27 @@ const getScript = (isTelemetryEnabled: boolean) => `<script>
 				loadCustomSnippets(customSnippetsData);
 			} else if (message.type === 'projectCommandsData') {
 				// Load discovered project commands from .claude/commands/
-				loadProjectCommands(message.data || []);
+				loadProjectCommands(message.data || [], message.duplicates || []);
+			} else if (message.type === 'syncComplete') {
+				// Show sync result in settings
+				const statusEl = document.getElementById('syncStatus');
+				if (statusEl) {
+					statusEl.style.display = 'block';
+					statusEl.className = 'sync-status success';
+					statusEl.textContent = '✅ ' + message.data.message;
+					// Hide after 3 seconds
+					setTimeout(() => {
+						statusEl.style.display = 'none';
+					}, 3000);
+				}
+			} else if (message.type === 'syncError') {
+				// Show sync error in settings
+				const statusEl = document.getElementById('syncStatus');
+				if (statusEl) {
+					statusEl.style.display = 'block';
+					statusEl.className = 'sync-status error';
+					statusEl.textContent = '❌ ' + message.data.message;
+				}
 			} else if (message.type === 'customSnippetSaved') {
 				// Refresh snippets after saving
 				vscode.postMessage({
