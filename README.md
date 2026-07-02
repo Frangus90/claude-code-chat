@@ -15,6 +15,7 @@ Ditch the command line and experience Claude Code like never before. This extens
 ## ✨ **Why Choose Claude Code Chat?**
 
 🖥️ **No Terminal Required** - Beautiful chat interface replaces command-line interactions  
+💬 **Mid-Task Follow-ups** - Send feedback while Claude is working, without stopping it  
 ⏪ **Restore Checkpoints** - Undo changes and restore code to any previous state  
 🔌 **MCP, Skills & Plugins** - Browse, search, and install from curated marketplaces  
 💾 **Conversation History** - Automatic conversation history and session management  
@@ -37,6 +38,12 @@ Ditch the command line and experience Claude Code like never before. This extens
 - Enhanced markdown support with syntax highlighting
 - Auto-resizing input that grows with your content
 - Copy-to-clipboard for code blocks
+
+### 💬 **Mid-Task Follow-ups (Steering)** ⭐ **NEW**
+- **Keep typing while Claude works** - the input stays active during a task
+- **Press Enter to send a follow-up** - feedback, corrections, or extra instructions land mid-stream
+- **Picked up at the next turn boundary** - delivered to the running Claude Code process, no restart needed
+- **Stop button unchanged** - steering complements stop, it doesn't replace it
 
 ### ⏪ **Checkpoint & Session Management**
 - **Restore Checkpoints** - Instantly undo changes and restore to any previous state
@@ -100,10 +107,8 @@ Ditch the command line and experience Claude Code like never before. This extens
 - Responsive design for any screen size
 
 ### 🤖 **Model Selection**
+- **Claude Code models** - Opus, Sonnet, Haiku, Fable, and Default — the same aliases as the CLI's `/model` menu, so the picker always matches the terminal and auto-tracks the latest version of each tier
 - **Quick Buttons** - GPT, Gemini, MiniMax, Kimi, GLM, DeepSeek above the text box
-- **Opus** - Most capable model for complex tasks requiring deep reasoning
-- **Sonnet** - Balanced model offering great performance for most use cases
-- **Default** - Uses your configured model setting
 - **150+ OpenCredits Models** - Browse and switch to any available model
 - Model preference persists across sessions
 - Provider choice (OpenCredits vs Anthropic) for Claude models
@@ -224,7 +229,7 @@ If you want to revert these changes, just click "Restore Checkpoint" to go back 
 | Shortcut | Action |
 |----------|--------|
 | `Ctrl+Shift+C` | Open Claude Code Chat |
-| `Enter` | Send message |
+| `Enter` | Send message (also works while Claude is running — sends a mid-task follow-up) |
 | `@` | Open file picker |
 | `/` | Open slash commands modal |
 
@@ -266,6 +271,7 @@ Example configuration in `settings.json`:
 - Permission system prevents accidental tool execution
 - YOLO mode for power users who want speed over safety
 - Inline stop button to cancel long-running operations
+- Send a follow-up mid-task (just type and press Enter) instead of stopping and re-prompting
 - Copy message contents to reuse Claude's responses
 - Open history panel to reference previous conversations
 - Sidebar integration for multi-panel workflow

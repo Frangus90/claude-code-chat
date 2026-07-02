@@ -2113,6 +2113,17 @@ const getScript = (isTelemetryEnabled: boolean, opencreditsApiUrl: string = 'htt
 			serversList.appendChild(actionsDiv);
 		}
 
+		// Native Claude Code models (id -> short label for the inline dropdown button).
+		// These mirror the aliases Claude Code's own /model menu exposes, so they always
+		// match the CLI. Any model not listed here is treated as an OpenCredits model.
+		const claudeCodeModels = {
+			'opus': 'Opus',
+			'sonnet': 'Sonnet',
+			'haiku': 'Haiku',
+			'fable': 'Fable',
+			'default': 'Model'
+		};
+
 		// Model selector functions
 		let currentModel = 'opus'; // Default model
 		let pendingModelSelection = null; // Model to activate after payment
@@ -2135,10 +2146,9 @@ const getScript = (isTelemetryEnabled: boolean, opencreditsApiUrl: string = 'htt
 			};
 		});
 
-		// Check if a model is a OpenCredits model (any model that's not a Claude model)
+		// Check if a model is a OpenCredits model (any model that's not a native Claude model)
 		function isOpenCreditsModel(modelId) {
-			const claudeModels = ['opus', 'sonnet', 'default'];
-			return !claudeModels.includes(modelId);
+			return !(modelId in claudeCodeModels);
 		}
 
 		// Render quick select buttons from recommended models data
@@ -2690,12 +2700,8 @@ const getScript = (isTelemetryEnabled: boolean, opencreditsApiUrl: string = 'htt
 
 		// Helper function to get display name for a model
 		function getModelDisplayName(modelId) {
-			const claudeModels = {
-				'opus': 'Claude Opus',
-				'sonnet': 'Claude Sonnet',
-				'default': 'Claude'
-			};
-			if (claudeModels[modelId]) return claudeModels[modelId];
+			if (modelId === 'default') return 'Claude';
+			if (claudeCodeModels[modelId]) return 'Claude ' + claudeCodeModels[modelId];
 
 			// Check OpenCredits models
 			const openCreditsModel = openCreditsModels.find(m => m.id === modelId);
@@ -2738,12 +2744,8 @@ const getScript = (isTelemetryEnabled: boolean, opencreditsApiUrl: string = 'htt
 
 			// Update inline model dropdown
 			if (modelDropdown) {
-				if (currentModel === 'opus') {
-					modelDropdown.textContent = 'Opus';
-				} else if (currentModel === 'sonnet') {
-					modelDropdown.textContent = 'Sonnet';
-				} else if (currentModel === 'default') {
-					modelDropdown.textContent = 'Model';
+				if (claudeCodeModels[currentModel]) {
+					modelDropdown.textContent = claudeCodeModels[currentModel];
 				} else {
 					var displayName = getModelDisplayName(currentModel);
 					var words = displayName.split(' ');
@@ -2751,10 +2753,9 @@ const getScript = (isTelemetryEnabled: boolean, opencreditsApiUrl: string = 'htt
 				}
 			}
 
-			if (currentModel === 'opus' || currentModel === 'sonnet') {
-				// Claude model selected - show model name, hide badge
-				const modelName = currentModel === 'opus' ? 'Claude Opus' : 'Claude Sonnet';
-				selectorText.textContent = modelName;
+			if (claudeCodeModels[currentModel] && currentModel !== 'default') {
+				// Native Claude model selected - show model name, hide badge
+				selectorText.textContent = getModelDisplayName(currentModel);
 				selectorBadge.style.display = 'none';
 			} else if (currentModel === 'default' || predefinedModels.includes(currentModel)) {
 				// Default or predefined OpenCredits model - show "Try other models" with NEW badge
@@ -3339,7 +3340,7 @@ const getScript = (isTelemetryEnabled: boolean, opencreditsApiUrl: string = 'htt
 		function showProviderChoice(model) {
 			hideModelModal();
 			var modal = document.getElementById('providerChoiceModal');
-			var modelName = model.charAt(0).toUpperCase() + model.slice(1);
+			var modelName = getModelDisplayName(model);
 			document.getElementById('providerChoiceTitle').textContent = 'Use ' + modelName + ' via';
 			modal.style.display = 'flex';
 
@@ -3378,9 +3379,8 @@ const getScript = (isTelemetryEnabled: boolean, opencreditsApiUrl: string = 'htt
 				return;
 			}
 
-			// Check if this is a OpenCredits model (not a standard Claude model)
-			const claudeModels = ['opus', 'sonnet', 'default'];
-			const isOpenCreditsModel = !claudeModels.includes(model);
+			// Check if this is a OpenCredits model (not a native Claude model)
+			const isOpenCreditsModel = !(model in claudeCodeModels);
 
 			// If selecting a OpenCredits model and envs are disabled, re-enable them
 			if (isOpenCreditsModel && envsDisabled && !fromBackend) {
@@ -3478,12 +3478,6 @@ const getScript = (isTelemetryEnabled: boolean, opencreditsApiUrl: string = 'htt
 				type: 'stopRequest'
 			});
 			hideStopButton();
-		}
-
-		// Disable/enable buttons during processing
-		function disableButtons() {
-			const sendBtn = document.getElementById('sendBtn');
-			if (sendBtn) sendBtn.disabled = true;
 		}
 
 		function enableButtons() {
@@ -3608,13 +3602,16 @@ const getScript = (isTelemetryEnabled: boolean, opencreditsApiUrl: string = 'htt
 					if (isProcessing) {
 						startRequestTimer(message.data.requestStartTime);
 						showStopButton();
-						disableButtons();
 						showProcessingIndicator();
+						// Input stays enabled: Enter sends a follow-up that is
+						// delivered to Claude mid-task (steering)
+						messageInput.placeholder = 'Claude is working — press Enter to send a follow-up…';
 					} else {
 						stopRequestTimer();
 						hideStopButton();
 						enableButtons();
 						hideProcessingIndicator();
+						messageInput.placeholder = 'Type your message to Claude Code...';
 					}
 					updateStatusWithTotals();
 					break;

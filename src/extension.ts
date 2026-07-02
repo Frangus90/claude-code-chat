@@ -9,6 +9,13 @@ import { fetchAndResolveModels } from './model-updater';
 import recommendedModels from './recommended-models.json';
 import { downloadClaude, detectPlatform, DownloaderError } from './claudeDownloader';
 
+// Native Claude Code models — selected via the CLI `--model` flag rather than
+// routed through OpenCredits/env vars. These mirror the aliases Claude Code's own
+// `/model` menu exposes, so they auto-track the latest version and never diverge
+// from the CLI. 'default' is native but passes no `--model` flag (lets Claude Code
+// use the user's configured default).
+const CLAUDE_MODEL_IDS = ['default', 'opus', 'sonnet', 'haiku', 'fable'];
+
 // OpenCredits environment configuration
 let OPENCREDITS_API_URL = 'https://ccc.api.opencredits.ai';
 let OPENCREDITS_WEB_URL = 'https://ccc.opencredits.ai';
@@ -199,6 +206,10 @@ class ClaudeChatProvider {
 	private _selectedModel: string = 'default'; // Default model
 	private _isProcessing: boolean | undefined;
 	private _draftMessage: string = '';
+	// Turns the running Claude process still owes a `result` for. Starts at 1 on
+	// spawn; each mid-stream steering message queues one more turn. stdin is only
+	// closed (and processing-state cleared) once this reaches 0.
+	private _pendingTurns: number = 0;
 
 	constructor(
 		private readonly _extensionUri: vscode.Uri,
@@ -859,6 +870,80 @@ class ClaudeChatProvider {
 		}
 	}
 
+	// Build stream-json user message content — detect image file paths in the
+	// text and inline them (plus any explicitly attached images) as base64
+	private async _buildUserMessageContent(actualMessage: string, images?: string[]): Promise<Array<{type: string; text?: string; source?: {type: string; media_type: string; data: string}}>> {
+		const content: Array<{type: string; text?: string; source?: {type: string; media_type: string; data: string}}> = [];
+		const imageExtensions = ClaudeChatProvider.IMAGE_EXTENSIONS;
+		const imageMediaTypes = ClaudeChatProvider.IMAGE_MEDIA_TYPES;
+
+		// Scan message for image file paths and inline them as base64
+		const imagePathRegex = /(\/[^\s]+\.(?:png|jpg|jpeg|gif|webp|bmp))\b/gi;
+		let lastIndex = 0;
+		let match;
+		while ((match = imagePathRegex.exec(actualMessage)) !== null) {
+			const imagePath = match[1];
+			const ext = path.extname(imagePath).toLowerCase();
+			if (imageExtensions.includes(ext)) {
+				try {
+					const imageData = await vscode.workspace.fs.readFile(vscode.Uri.file(imagePath));
+					const base64 = Buffer.from(imageData).toString('base64');
+					// Flush text before this match
+					const textBefore = actualMessage.substring(lastIndex, match.index);
+					if (textBefore.trim()) {
+						content.push({ type: 'text', text: textBefore.trim() });
+					}
+					content.push({
+						type: 'image',
+						source: {
+							type: 'base64',
+							media_type: imageMediaTypes[ext] || 'image/png',
+							data: base64
+						}
+					});
+					lastIndex = match.index + match[0].length;
+				} catch (e) {
+					console.error('Could not read image file:', imagePath, e);
+				}
+			}
+		}
+		// Add remaining text
+		const remaining = actualMessage.substring(lastIndex);
+		if (remaining.trim()) {
+			content.push({ type: 'text', text: remaining.trim() });
+		}
+
+		// Add explicitly attached images
+		if (images && images.length > 0) {
+			for (const imagePath of images) {
+				const ext = imageExtensions.find(e => imagePath.toLowerCase().endsWith(e));
+				if (ext) {
+					try {
+						const imageData = await vscode.workspace.fs.readFile(vscode.Uri.file(imagePath));
+						const base64 = Buffer.from(imageData).toString('base64');
+						content.push({
+							type: 'image',
+							source: {
+								type: 'base64',
+								media_type: imageMediaTypes[ext] || 'image/png',
+								data: base64
+							}
+						});
+					} catch (e) {
+						console.error('Could not read attached image:', imagePath, e);
+					}
+				}
+			}
+		}
+
+		// Ensure at least one text block
+		if (content.length === 0) {
+			content.push({ type: 'text', text: actualMessage });
+		}
+
+		return content;
+	}
+
 	private async _sendMessageToClaude(message: string, planMode?: boolean, thinkingMode?: boolean, images?: string[]) {
 		const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
 		const cwd = workspaceFolder ? workspaceFolder.uri.fsPath : process.cwd();
@@ -889,6 +974,39 @@ class ClaudeChatProvider {
 					thinkingPrompt = 'THINK';
 			}
 			actualMessage = thinkingPrompt + thinkingMesssage + actualMessage;
+		}
+
+		// Mid-stream steering: if a turn is already running, deliver this message
+		// to the running process over stdin (stream-json user message) instead of
+		// spawning a second concurrent process. The CLI queues it and Claude picks
+		// it up at its next turn boundary.
+		if (this._isProcessing && this._currentClaudeProcess) {
+			const stdin = this._currentClaudeProcess.stdin;
+			if (stdin && stdin.writable && !stdin.destroyed) {
+				// Show the message in chat and persist it
+				this._sendAndSaveMessage({
+					type: 'userInput',
+					data: message
+				});
+
+				const content = await this._buildUserMessageContent(actualMessage, images);
+				const steerMessage = {
+					type: 'user',
+					session_id: this._currentSessionId || '',
+					message: {
+						role: 'user',
+						content: content
+					},
+					parent_tool_use_id: null
+				};
+				// This queues one more turn (and one more `result`) — keep stdin
+				// open until the CLI has answered it.
+				this._pendingTurns++;
+				stdin.write(JSON.stringify(steerMessage) + '\n');
+				return;
+			}
+			// stdin already closed — the current turn just finished and the process
+			// is winding down. Fall through and start a fresh turn via --resume.
 		}
 
 		this._isProcessing = true;
@@ -959,10 +1077,10 @@ class ClaudeChatProvider {
 			args.push('--permission-mode', 'plan');
 		}
 
-		// Add model selection for Claude models only (opus, sonnet)
-		// OpenCredits models are handled via env vars or router mapping
-		const claudeModels = ['opus', 'sonnet'];
-		if (this._selectedModel && claudeModels.includes(this._selectedModel)) {
+		// Add model selection for native Claude models (aliases + pinned versions).
+		// 'default' is native but omits --model so Claude Code picks; OpenCredits
+		// models are handled via env vars or router mapping instead.
+		if (this._selectedModel && this._selectedModel !== 'default' && CLAUDE_MODEL_IDS.includes(this._selectedModel)) {
 			args.push('--model', this._selectedModel);
 		}
 
@@ -1073,6 +1191,8 @@ class ClaudeChatProvider {
 
 		// Store process reference for potential termination
 		this._currentClaudeProcess = claudeProcess;
+		// This spawn owes one result; mid-stream steering messages add more
+		this._pendingTurns = 1;
 
 		// Send the message to Claude's stdin as JSON (stream-json input format)
 		// Don't end stdin yet - we need to keep it open for permission responses
@@ -1090,74 +1210,7 @@ class ClaudeChatProvider {
 				claudeProcess.stdin.write(JSON.stringify(initRequest) + '\n');
 			}
 
-			// Build message content — detect image file paths and inline them as base64
-			const content: Array<{type: string; text?: string; source?: {type: string; media_type: string; data: string}}> = [];
-			const imageExtensions = ClaudeChatProvider.IMAGE_EXTENSIONS;
-			const imageMediaTypes = ClaudeChatProvider.IMAGE_MEDIA_TYPES;
-
-			// Scan message for image file paths and inline them as base64
-			const imagePathRegex = /(\/[^\s]+\.(?:png|jpg|jpeg|gif|webp|bmp))\b/gi;
-			let lastIndex = 0;
-			let match;
-			while ((match = imagePathRegex.exec(actualMessage)) !== null) {
-				const imagePath = match[1];
-				const ext = path.extname(imagePath).toLowerCase();
-				if (imageExtensions.includes(ext)) {
-					try {
-						const imageData = await vscode.workspace.fs.readFile(vscode.Uri.file(imagePath));
-						const base64 = Buffer.from(imageData).toString('base64');
-						// Flush text before this match
-						const textBefore = actualMessage.substring(lastIndex, match.index);
-						if (textBefore.trim()) {
-							content.push({ type: 'text', text: textBefore.trim() });
-						}
-						content.push({
-							type: 'image',
-							source: {
-								type: 'base64',
-								media_type: imageMediaTypes[ext] || 'image/png',
-								data: base64
-							}
-						});
-						lastIndex = match.index + match[0].length;
-					} catch (e) {
-						console.error('Could not read image file:', imagePath, e);
-					}
-				}
-			}
-			// Add remaining text
-			const remaining = actualMessage.substring(lastIndex);
-			if (remaining.trim()) {
-				content.push({ type: 'text', text: remaining.trim() });
-			}
-
-			// Add explicitly attached images
-			if (images && images.length > 0) {
-				for (const imagePath of images) {
-					const ext = imageExtensions.find(e => imagePath.toLowerCase().endsWith(e));
-					if (ext) {
-						try {
-							const imageData = await vscode.workspace.fs.readFile(vscode.Uri.file(imagePath));
-							const base64 = Buffer.from(imageData).toString('base64');
-							content.push({
-								type: 'image',
-								source: {
-									type: 'base64',
-									media_type: imageMediaTypes[ext] || 'image/png',
-									data: base64
-								}
-							});
-						} catch (e) {
-							console.error('Could not read attached image:', imagePath, e);
-						}
-					}
-				}
-			}
-
-			// Ensure at least one text block
-			if (content.length === 0) {
-				content.push({ type: 'text', text: actualMessage });
-			}
+			const content = await this._buildUserMessageContent(actualMessage, images);
 
 			const userMessage = {
 				type: 'user',
@@ -1177,6 +1230,12 @@ class ClaudeChatProvider {
 
 		if (claudeProcess.stdout) {
 			claudeProcess.stdout.on('data', (data) => {
+				// Ignore output from a process that was stopped (or replaced by a
+				// newer one) — a straggler surviving the kill must not keep
+				// streaming messages into the chat.
+				if (this._currentClaudeProcess !== claudeProcess) {
+					return;
+				}
 				rawOutput += data.toString();
 
 				// Process JSON stream line by line
@@ -1202,9 +1261,11 @@ class ClaudeChatProvider {
 								continue;
 							}
 
-							// Handle result message - end stdin when done
+							// Handle result message — one turn answered. Only end
+							// stdin once no steered turns are still queued.
 							if (jsonData.type === 'result') {
-								if (claudeProcess.stdin && !claudeProcess.stdin.destroyed) {
+								this._pendingTurns = Math.max(0, this._pendingTurns - 1);
+								if (this._pendingTurns === 0 && claudeProcess.stdin && !claudeProcess.stdin.destroyed) {
 									claudeProcess.stdin.end();
 								}
 							}
@@ -1226,12 +1287,15 @@ class ClaudeChatProvider {
 
 		claudeProcess.on('close', (code) => {
 
-			if (!this._currentClaudeProcess) {
+			// Only react if this is still the active process — after a stop (or
+			// once a newer process has been started) this close is stale.
+			if (this._currentClaudeProcess !== claudeProcess) {
 				return;
 			}
 
 			// Clear process reference
 			this._currentClaudeProcess = undefined;
+			this._pendingTurns = 0;
 
 			// Cancel any pending permission requests (process is gone)
 			this._cancelPendingPermissionRequests();
@@ -1270,7 +1334,7 @@ class ClaudeChatProvider {
 		claudeProcess.on('error', (error) => {
 			console.error('Claude process error:', error.message);
 
-			if (!this._currentClaudeProcess) {
+			if (this._currentClaudeProcess !== claudeProcess) {
 				return;
 			}
 
@@ -1554,7 +1618,11 @@ class ClaudeChatProvider {
 						return;
 					}
 
-					this._isProcessing = false;
+					// A steered turn may still be queued — only leave the
+					// processing state once every pending turn has answered
+					if (this._pendingTurns === 0) {
+						this._isProcessing = false;
+					}
 
 					// Capture session ID from final result
 					if (jsonData.session_id) {
@@ -1572,11 +1640,13 @@ class ClaudeChatProvider {
 						});
 					}
 
-					// Clear processing state
-					this._postMessage({
-						type: 'setProcessing',
-						data: { isProcessing: false }
-					});
+					// Clear processing state (unless a steered turn is still queued)
+					if (this._pendingTurns === 0) {
+						this._postMessage({
+							type: 'setProcessing',
+							data: { isProcessing: false }
+						});
+					}
 
 					// Update cumulative tracking
 					this._requestCount++;
@@ -3168,24 +3238,35 @@ class ClaudeChatProvider {
 		const processToKill = this._currentClaudeProcess;
 		const pid = processToKill?.pid;
 
-		// 1. Abort via controller (clean API)
-		this._abortController?.abort();
-		this._abortController = undefined;
-
-		// 2. Clear reference immediately
+		// 1. Clear reference immediately so stream handlers ignore any further
+		// output from this process
 		this._currentClaudeProcess = undefined;
+		this._pendingTurns = 0;
 
 		if (!pid) {
+			this._abortController?.abort();
+			this._abortController = undefined;
 			return;
 		}
 
-
-		// 3. Kill process group (handles children)
+		// 2. Kill the process tree FIRST, while the spawned process is still
+		// alive. On Windows the spawned pid is a cmd.exe wrapper and
+		// `taskkill /t` can only enumerate its children through the live
+		// parent — aborting first kills the wrapper, orphans the real claude
+		// process, and the tree kill then finds nothing.
 		await this._killProcessGroup(pid, 'SIGTERM');
 
-		// 4. Wait for process to exit, with timeout
+		// 3. Now abort the controller (closes stdio, kills the wrapper if it
+		// somehow survived the tree kill)
+		this._abortController?.abort();
+		this._abortController = undefined;
+
+		// 4. Wait for process to exit, with timeout. Use exitCode/signalCode
+		// rather than `killed` — `killed` only records that kill() was called,
+		// not that the process (let alone its tree) actually exited.
+		const hasExited = () => processToKill!.exitCode !== null || processToKill!.signalCode !== null;
 		const exitPromise = new Promise<void>((resolve) => {
-			if (processToKill?.killed) {
+			if (hasExited()) {
 				resolve();
 				return;
 			}
@@ -3199,10 +3280,9 @@ class ClaudeChatProvider {
 		await Promise.race([exitPromise, timeoutPromise]);
 
 		// 5. Force kill if still running
-		if (processToKill && !processToKill.killed) {
+		if (!hasExited()) {
 			await this._killProcessGroup(pid, 'SIGKILL');
 		}
-
 	}
 
 	private async _stopClaudeProcess(): Promise<void> {
@@ -3480,10 +3560,7 @@ class ClaudeChatProvider {
 	}
 
 	private async _setSelectedModel(model: string, tierModels?: { sonnet: string; opus: string; haiku: string }): Promise<void> {
-		// Valid Claude models
-		const validClaudeModels = ['opus', 'sonnet', 'default'];
-
-		if (validClaudeModels.includes(model)) {
+		if (CLAUDE_MODEL_IDS.includes(model)) {
 			this._selectedModel = model;
 
 			// Store the model preference in workspace state

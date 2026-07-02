@@ -434,15 +434,23 @@ const getHtml = (isTelemetryEnabled: boolean, opencreditsApiUrl: string = 'https
 				<div class="claude-cards-container" id="claudeModelCards">
 					<div class="claude-card" data-model="opus" onclick="selectModel('opus')">
 						<div class="claude-card-name">Opus</div>
-						<div class="claude-card-desc">Most powerful, best for complex tasks</div>
+						<div class="claude-card-desc">Best for everyday, complex tasks</div>
 					</div>
 					<div class="claude-card" data-model="sonnet" onclick="selectModel('sonnet')">
 						<div class="claude-card-name">Sonnet</div>
-						<div class="claude-card-desc">Balanced performance and speed</div>
+						<div class="claude-card-desc">Efficient for routine tasks</div>
+					</div>
+					<div class="claude-card" data-model="haiku" onclick="selectModel('haiku')">
+						<div class="claude-card-name">Haiku</div>
+						<div class="claude-card-desc">Fastest for quick answers</div>
+					</div>
+					<div class="claude-card" data-model="fable" onclick="selectModel('fable')">
+						<div class="claude-card-name">Fable</div>
+						<div class="claude-card-desc">Most capable, for your hardest tasks</div>
 					</div>
 					<div class="claude-card" data-model="default" onclick="selectModel('default')">
 						<div class="claude-card-name">Default</div>
-						<div class="claude-card-desc">Let Claude Code choose the best model</div>
+						<div class="claude-card-desc">Use your Claude Code /model default</div>
 					</div>
 				</div>
 			</div>

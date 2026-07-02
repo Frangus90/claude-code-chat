@@ -4,6 +4,15 @@ All notable changes to the "claude-code-chat" extension will be documented in th
 
 Check [Keep a Changelog](http://keepachangelog.com/) for recommendations on how to structure this file.
 
+## [2.3.3] - Unreleased
+
+### 🚀 Features Added
+- **Mid-task follow-ups (steering)**: You can now keep typing while Claude is working — press Enter to send feedback or extra instructions mid-stream, like Cursor/Codex. The message is delivered to the running Claude Code process over its stream-json stdin and picked up at the next turn boundary, instead of having to wait (or stop and resend). The input placeholder hints at this while a task is running; the stop button still works as before.
+- **Model selector mirrors Claude Code's `/model` menu**: The Claude Code section now lists the same aliases the CLI exposes — Opus, Sonnet, Haiku, **Fable**, and Default — instead of a hand-maintained version list. Each maps straight to `--model <alias>`, so the picker always matches the terminal `/model` list and auto-tracks the latest version of each tier without needing updates when new models ship.
+
+### 🐛 Bug Fixes
+- **Stop button now actually stops Claude**: On Windows, stopping killed only the `cmd.exe` shell wrapper (via the spawn abort signal) before running `taskkill /t` — by then the parent was dead, the tree walk found nothing, and the real Claude process survived as an orphan, still streaming output into the chat. The kill sequence now tree-kills first while the parent is alive, aborts after, verifies exit via `exitCode`/`signalCode` instead of the misleading `killed` flag, and escalates to a force kill if the process is still running. Output handlers also ignore stopped/stale processes, so a straggler can no longer keep painting messages or clobber the state of a newer session.
+
 ## [2.2.0] - 2026-06-22
 
 ### 🚀 Features Added
